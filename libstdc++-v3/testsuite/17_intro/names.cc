@@ -282,6 +282,12 @@
 #undef y
 #endif
 
+#if defined (__linux__) && defined (__ia64__)
+// <bits/sigcontext.h> defines __ia64_fpreg::u
+// <sys/ucontext.h> defines __ia64_fpreg_mcontext::u
+#undef u
+#endif
+
 #if defined (__linux__) || defined (__gnu_hurd__)
 #if __has_include(<features.h>)
 #include <features.h>
@@ -375,6 +381,13 @@
 #undef x
 // <math.h> defines _complex::x and _complex::y
 #undef y
+#endif
+
+#if defined __GLIBC_PREREQ && defined _FORTIFY_SOURCE
+# if ! __GLIBC_PREREQ(2,41)
+// https://sourceware.org/bugzilla/show_bug.cgi?id=32052
+#  undef sz
+# endif
 #endif
 
 #include <bits/stdc++.h>

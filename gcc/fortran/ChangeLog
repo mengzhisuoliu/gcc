@@ -1,3 +1,27 @@
+2024-10-08  Andre Vehreschild  <vehre@gcc.gnu.org>
+
+	PR fortran/51815
+	* array.cc (gfc_match_array_ref): Only parse coarray part of
+	ref.
+	* match.h (gfc_match_array_ref): Add flag.
+	* primary.cc (gfc_match_varspec): Request only coarray ref
+	parsing when no regular array is present.  Report error on
+	unexpected additional ref.
+
+2024-10-07  Thomas Koenig  <tkoenig@gcc.gnu.org>
+
+	* check.cc (gfc_check_minloc_maxloc): Handle BT_UNSIGNED.
+	* trans-intrinsic.cc (gfc_conv_intrinsic_minmaxloc): Likewise.
+	* gfortran.texi: Document MAXLOC and MINLOC for UNSIGNED.
+
+2024-10-07  Tobias Burnus  <tburnus@baylibre.com>
+
+	* openmp.cc (is_predefined_allocator): Use gomp-constants.h consts.
+	* trans-common.cc (translate_common): Reject OpenMP allocate directives.
+	* trans-decl.cc (gfc_finish_var_decl): Handle allocate directive
+	for static variables.
+	(gfc_trans_deferred_vars): Update for the latter.
+
 2024-10-01  Thomas Koenig  <tkoenig@gcc.gnu.org>
 
 	* check.cc (int_or_real_or_char_or_unsigned_check_f2003): New function.

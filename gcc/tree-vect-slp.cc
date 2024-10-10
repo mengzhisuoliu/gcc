@@ -507,6 +507,7 @@ static const int cond_expr_maps[3][5] = {
   { 4, -2, -1, 1, 2 },
   { 4, -1, -2, 2, 1 }
 };
+static const int no_arg_map[] = { 0 };
 static const int arg0_map[] = { 1, 0 };
 static const int arg1_map[] = { 1, 1 };
 static const int arg2_map[] = { 1, 2 };
@@ -586,6 +587,9 @@ vect_get_operand_map (const gimple *stmt, bool gather_scatter_p = false,
 	  case IFN_CLZ:
 	  case IFN_CTZ:
 	    return arg0_map;
+
+	  case IFN_GOMP_SIMD_LANE:
+	    return no_arg_map;
 
 	  default:
 	    break;
@@ -901,7 +905,8 @@ vect_get_and_check_slp_defs (vec_info *vinfo, unsigned char swap,
 	    }
 
 	  if (is_a <bb_vec_info> (vinfo)
-	      && !oprnd_info->any_pattern)
+	      && !oprnd_info->any_pattern
+	      && number_of_oprnds > 1)
 	    {
 	      /* Now for commutative ops we should see whether we can
 		 make the other operand matching.  */
@@ -1175,6 +1180,8 @@ vect_build_slp_tree_1 (vec_info *vinfo, unsigned char *swap,
 	      ldst_p = true;
 	      rhs_code = CFN_MASK_STORE;
 	    }
+	  else if (cfn == CFN_GOMP_SIMD_LANE)
+	    ;
 	  else if ((cfn != CFN_LAST
 		    && cfn != CFN_MASK_CALL
 		    && internal_fn_p (cfn)
@@ -1273,6 +1280,11 @@ vect_build_slp_tree_1 (vec_info *vinfo, unsigned char *swap,
 	      need_same_oprnds = true;
 	      first_op1 = gimple_call_arg (call_stmt, 1);
 	    }
+	  else if (rhs_code == CFN_GOMP_SIMD_LANE)
+	    {
+	      need_same_oprnds = true;
+	      first_op1 = gimple_call_arg (call_stmt, 1);
+	    }
 	}
       else
 	{
@@ -1294,10 +1306,12 @@ vect_build_slp_tree_1 (vec_info *vinfo, unsigned char *swap,
 	      /* Mismatch.  */
 	      continue;
 	    }
-	  if (first_stmt_code != rhs_code
+	  if (!ldst_p
+	      && first_stmt_code != rhs_code
 	      && alt_stmt_code == ERROR_MARK)
 	    alt_stmt_code = rhs_code;
-	  if ((first_stmt_code != rhs_code
+	  if ((!ldst_p
+	       && first_stmt_code != rhs_code
 	       && (first_stmt_code != IMAGPART_EXPR
 		   || rhs_code != REALPART_EXPR)
 	       && (first_stmt_code != REALPART_EXPR
@@ -1314,20 +1328,7 @@ vect_build_slp_tree_1 (vec_info *vinfo, unsigned char *swap,
 		    && (TREE_CODE_CLASS (tree_code (first_stmt_code))
 			== tcc_comparison)
 		    && (swap_tree_comparison (tree_code (first_stmt_code))
-			== tree_code (rhs_code)))
-	       && !(STMT_VINFO_GROUPED_ACCESS (stmt_info)
-		    && (first_stmt_code == ARRAY_REF
-			|| first_stmt_code == BIT_FIELD_REF
-			|| first_stmt_code == COMPONENT_REF
-			|| first_stmt_code == REALPART_EXPR
-			|| first_stmt_code == IMAGPART_EXPR
-			|| first_stmt_code == MEM_REF)
-		    && (rhs_code == ARRAY_REF
-			|| rhs_code == BIT_FIELD_REF
-			|| rhs_code == COMPONENT_REF
-			|| rhs_code == REALPART_EXPR
-			|| rhs_code == IMAGPART_EXPR
-			|| rhs_code == MEM_REF)))
+			== tree_code (rhs_code))))
 	      || (ldst_p
 		  && (STMT_VINFO_GROUPED_ACCESS (stmt_info)
 		      != STMT_VINFO_GROUPED_ACCESS (first_stmt_info)))
@@ -1366,8 +1367,9 @@ vect_build_slp_tree_1 (vec_info *vinfo, unsigned char *swap,
 	      && first_stmt_code != CFN_MASK_LOAD
 	      && first_stmt_code != CFN_MASK_STORE)
 	    {
-	      if (!compatible_calls_p (as_a <gcall *> (stmts[0]->stmt),
-				       call_stmt))
+	      if (!is_a <gcall *> (stmts[0]->stmt)
+		  || !compatible_calls_p (as_a <gcall *> (stmts[0]->stmt),
+					  call_stmt))
 		{
 		  if (dump_enabled_p ())
 		    dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
@@ -2018,16 +2020,66 @@ vect_build_slp_tree_2 (vec_info *vinfo, slp_tree node,
 			  || gimple_call_internal_p (stmt, IFN_MASK_GATHER_LOAD)
 			  || gimple_call_internal_p (stmt,
 						     IFN_MASK_LEN_GATHER_LOAD));
-	      load_permutation.release ();
-	      /* We cannot handle permuted masked loads, see PR114375.  */
-	      if (any_permute
-		  || (STMT_VINFO_GROUPED_ACCESS (stmt_info)
-		      && DR_GROUP_SIZE (first_stmt_info) != group_size)
+	      bool has_gaps = false;
+	      if (STMT_VINFO_GROUPED_ACCESS (stmt_info))
+		for (stmt_vec_info si = DR_GROUP_NEXT_ELEMENT (first_stmt_info);
+		     si; si = DR_GROUP_NEXT_ELEMENT (si))
+		  if (DR_GROUP_GAP (si) != 1)
+		    has_gaps = true;
+	      /* We cannot handle permuted masked loads directly, see
+		 PR114375.  We cannot handle strided masked loads or masked
+		 loads with gaps.  */
+	      if ((STMT_VINFO_GROUPED_ACCESS (stmt_info)
+		   && (DR_GROUP_GAP (first_stmt_info) != 0 || has_gaps))
 		  || STMT_VINFO_STRIDED_P (stmt_info))
 		{
+		  load_permutation.release ();
 		  matches[0] = false;
 		  return NULL;
 		}
+
+	      /* For permuted masked loads do an unpermuted masked load of
+		 the whole group followed by a SLP permute node.  */
+	      if (any_permute
+		  || (STMT_VINFO_GROUPED_ACCESS (stmt_info)
+		      && DR_GROUP_SIZE (first_stmt_info) != group_size))
+		{
+		  /* Discover the whole unpermuted load.  */
+		  vec<stmt_vec_info> stmts2;
+		  stmts2.create (DR_GROUP_SIZE (first_stmt_info));
+		  stmts2.quick_grow_cleared (DR_GROUP_SIZE (first_stmt_info));
+		  unsigned i = 0;
+		  for (stmt_vec_info si = first_stmt_info;
+		       si; si = DR_GROUP_NEXT_ELEMENT (si))
+		    stmts2[i++] = si;
+		  bool *matches2
+		    = XALLOCAVEC (bool, DR_GROUP_SIZE (first_stmt_info));
+		  slp_tree unperm_load
+		    = vect_build_slp_tree (vinfo, stmts2,
+					   DR_GROUP_SIZE (first_stmt_info),
+					   &this_max_nunits, matches2, limit,
+					   &this_tree_size, bst_map);
+		  /* When we are able to do the full masked load emit that
+		     followed by 'node' being the desired final permutation.  */
+		  if (unperm_load)
+		    {
+		      lane_permutation_t lperm;
+		      lperm.create (group_size);
+		      for (unsigned j = 0; j < load_permutation.length (); ++j)
+			lperm.quick_push
+			  (std::make_pair (0, load_permutation[j]));
+		      SLP_TREE_CODE (node) = VEC_PERM_EXPR;
+		      SLP_TREE_CHILDREN (node).safe_push (unperm_load);
+		      SLP_TREE_LANE_PERMUTATION (node) = lperm;
+		      load_permutation.release ();
+		      return node;
+		    }
+		  stmts2.release ();
+		  load_permutation.release ();
+		  matches[0] = false;
+		  return NULL;
+		}
+	      load_permutation.release ();
 	    }
 	  else
 	    {
@@ -7013,7 +7065,7 @@ vect_cse_slp_nodes (scalar_stmts_to_slp_tree_map_t *bst_map, slp_tree& node)
 
   /* Now record the node for CSE in other siblings.  */
   if (put_p)
-    bst_map->put (SLP_TREE_SCALAR_STMTS (node).copy (), node);
+    *bst_map->get (SLP_TREE_SCALAR_STMTS (node)) = node;
 }
 
 /* Optimize the SLP graph of VINFO.  */
@@ -10197,6 +10249,13 @@ vectorizable_slp_permutation_1 (vec_info *vinfo, gimple_stmt_iterator *gsi,
   unsigned i;
   poly_uint64 nunits = TYPE_VECTOR_SUBPARTS (vectype);
   bool repeating_p = multiple_p (nunits, SLP_TREE_LANES (node));
+  /* True if we're permuting a single input of 2N vectors down
+     to N vectors.  This case doesn't generalize beyond 2 since
+     VEC_PERM_EXPR only takes 2 inputs.  */
+  bool pack_p = false;
+  /* If we're permuting inputs of N vectors each into X*N outputs,
+     this is the value of X, otherwise it is 1.  */
+  unsigned int unpack_factor = 1;
   tree op_vectype = NULL_TREE;
   FOR_EACH_VEC_ELT (children, i, child)
     if (SLP_TREE_VECTYPE (child))
@@ -10218,7 +10277,29 @@ vectorizable_slp_permutation_1 (vec_info *vinfo, gimple_stmt_iterator *gsi,
 			     "Unsupported vector types in lane permutation\n");
 	  return -1;
 	}
-      if (SLP_TREE_LANES (child) != SLP_TREE_LANES (node))
+      auto op_nunits = TYPE_VECTOR_SUBPARTS (op_vectype);
+      unsigned int this_unpack_factor;
+      /* Detect permutations of external, pre-existing vectors.  The external
+	 node's SLP_TREE_LANES stores the total number of units in the vector,
+	 or zero if the vector has variable length.
+
+	 We are expected to keep the original VEC_PERM_EXPR for such cases.
+	 There is no repetition to model.  */
+      if (SLP_TREE_DEF_TYPE (child) == vect_external_def
+	  && SLP_TREE_SCALAR_OPS (child).is_empty ())
+	repeating_p = false;
+      /* Check whether the input has twice as many lanes per vector.  */
+      else if (children.length () == 1
+	       && known_eq (SLP_TREE_LANES (child) * nunits,
+			    SLP_TREE_LANES (node) * op_nunits * 2))
+	pack_p = true;
+      /* Check whether the output has N times as many lanes per vector.  */
+      else if (constant_multiple_p (SLP_TREE_LANES (node) * op_nunits,
+				    SLP_TREE_LANES (child) * nunits,
+				    &this_unpack_factor)
+	       && (i == 0 || unpack_factor == this_unpack_factor))
+	unpack_factor = this_unpack_factor;
+      else
 	repeating_p = false;
     }
 
@@ -10246,29 +10327,47 @@ vectorizable_slp_permutation_1 (vec_info *vinfo, gimple_stmt_iterator *gsi,
       return 1;
     }
 
-  /* REPEATING_P is true if every output vector is guaranteed to use the
-     same permute vector.  We can handle that case for both variable-length
-     and constant-length vectors, but we only handle other cases for
-     constant-length vectors.
+  /* Set REPEATING_P to true if the permutations are cylical wrt UNPACK_FACTOR
+     and if we can generate the vectors in a vector-length agnostic way.
+     This requires UNPACK_STEP == NUNITS / UNPACK_FACTOR to be known at
+     compile time.
+
+     The significance of UNPACK_STEP is that, when PACK_P is false,
+     output vector I operates on a window of UNPACK_STEP elements from each
+     input, starting at lane UNPACK_STEP * (I % UNPACK_FACTOR).  For example,
+     when UNPACK_FACTOR is 2, the first output vector operates on lanes
+     [0, NUNITS / 2 - 1] of each input vector and the second output vector
+     operates on lanes [NUNITS / 2, NUNITS - 1] of each input vector.
+
+     When REPEATING_P is true, NOUTPUTS holds the total number of outputs
+     that we actually need to generate.  */
+  uint64_t noutputs = 0;
+  poly_uint64 unpack_step = 0;
+  loop_vec_info linfo = dyn_cast <loop_vec_info> (vinfo);
+  if (!linfo
+      || !multiple_p (nunits, unpack_factor, &unpack_step)
+      || !constant_multiple_p (LOOP_VINFO_VECT_FACTOR (linfo)
+			       * SLP_TREE_LANES (node), nunits, &noutputs))
+    repeating_p = false;
+
+  /* We can handle the conditions described for REPEATING_P above for
+     both variable- and constant-length vectors.  The fallback requires
+     us to generate every element of every permute vector explicitly,
+     which is only possible for constant-length permute vectors.
 
      Set:
 
      - NPATTERNS and NELTS_PER_PATTERN to the encoding of the permute
-       mask vector that we want to build.
+       mask vectors that we want to build.
 
      - NCOPIES to the number of copies of PERM that we need in order
-       to build the necessary permute mask vectors.
-
-     - NOUTPUTS_PER_MASK to the number of output vectors we want to create
-       for each permute mask vector.  This is only relevant when GSI is
-       nonnull.  */
+       to build the necessary permute mask vectors.  */
   uint64_t npatterns;
   unsigned nelts_per_pattern;
   uint64_t ncopies;
-  unsigned noutputs_per_mask;
   if (repeating_p)
     {
-      /* We need a single permute mask vector that has the form:
+      /* We need permute mask vectors that have the form:
 
 	   { X1, ..., Xn, X1 + n, ..., Xn + n, X1 + 2n, ..., Xn + 2n, ... }
 
@@ -10277,7 +10376,6 @@ vectorizable_slp_permutation_1 (vec_info *vinfo, gimple_stmt_iterator *gsi,
 	 that we use for permutes requires 3n elements.  */
       npatterns = SLP_TREE_LANES (node);
       nelts_per_pattern = ncopies = 3;
-      noutputs_per_mask = SLP_TREE_NUMBER_OF_VEC_STMTS (node);
     }
   else
     {
@@ -10285,44 +10383,64 @@ vectorizable_slp_permutation_1 (vec_info *vinfo, gimple_stmt_iterator *gsi,
 	 instead of relying on the pattern described above.  */
       if (!nunits.is_constant (&npatterns)
 	  || !TYPE_VECTOR_SUBPARTS (op_vectype).is_constant ())
-	return -1;
-      nelts_per_pattern = ncopies = 1;
-      if (loop_vec_info linfo = dyn_cast <loop_vec_info> (vinfo))
-	if (!LOOP_VINFO_VECT_FACTOR (linfo).is_constant (&ncopies))
+	{
+	  if (dump_p)
+	    dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
+			     "unsupported permutation %p on variable-length"
+			     " vectors\n", (void *) node);
 	  return -1;
-      noutputs_per_mask = 1;
+	}
+      nelts_per_pattern = ncopies = 1;
+      if (linfo && !LOOP_VINFO_VECT_FACTOR (linfo).is_constant (&ncopies))
+	{
+	  if (dump_p)
+	    dump_printf_loc (MSG_MISSED_OPTIMIZATION, vect_location,
+			     "unsupported permutation %p for variable VF\n",
+			     (void *) node);
+	  return -1;
+	}
+      pack_p = false;
+      unpack_factor = 1;
     }
-  unsigned olanes = ncopies * SLP_TREE_LANES (node);
+  unsigned olanes = unpack_factor * ncopies * SLP_TREE_LANES (node);
   gcc_assert (repeating_p || multiple_p (olanes, nunits));
 
   /* Compute the { { SLP operand, vector index}, lane } permutation sequence
      from the { SLP operand, scalar lane } permutation as recorded in the
      SLP node as intermediate step.  This part should already work
      with SLP children with arbitrary number of lanes.  */
-  auto_vec<std::pair<std::pair<unsigned, unsigned>, unsigned> > vperm;
-  auto_vec<unsigned> active_lane;
+  auto_vec<std::pair<std::pair<unsigned, unsigned>, poly_uint64>> vperm;
+  auto_vec<poly_uint64> active_lane;
   vperm.create (olanes);
   active_lane.safe_grow_cleared (children.length (), true);
-  for (unsigned i = 0; i < ncopies; ++i)
+  for (unsigned int ui = 0; ui < unpack_factor; ++ui)
     {
-      for (unsigned pi = 0; pi < perm.length (); ++pi)
-	{
-	  std::pair<unsigned, unsigned> p = perm[pi];
-	  tree vtype = SLP_TREE_VECTYPE (children[p.first]);
-	  if (repeating_p)
-	    vperm.quick_push ({{p.first, 0}, p.second + active_lane[p.first]});
-	  else
-	    {
-	      /* We checked above that the vectors are constant-length.  */
-	      unsigned vnunits = TYPE_VECTOR_SUBPARTS (vtype).to_constant ();
-	      unsigned vi = (active_lane[p.first] + p.second) / vnunits;
-	      unsigned vl = (active_lane[p.first] + p.second) % vnunits;
-	      vperm.quick_push ({{p.first, vi}, vl});
-	    }
-	}
-      /* Advance to the next group.  */
       for (unsigned j = 0; j < children.length (); ++j)
-	active_lane[j] += SLP_TREE_LANES (children[j]);
+	active_lane[j] = ui * unpack_step;
+      for (unsigned i = 0; i < ncopies; ++i)
+	{
+	  for (unsigned pi = 0; pi < perm.length (); ++pi)
+	    {
+	      std::pair<unsigned, unsigned> p = perm[pi];
+	      tree vtype = SLP_TREE_VECTYPE (children[p.first]);
+	      if (repeating_p)
+		vperm.quick_push ({{p.first, 0},
+				   p.second + active_lane[p.first]});
+	      else
+		{
+		  /* We checked above that the vectors are constant-length.  */
+		  unsigned vnunits = TYPE_VECTOR_SUBPARTS (vtype)
+		    .to_constant ();
+		  unsigned lane = active_lane[p.first].to_constant ();
+		  unsigned vi = (lane + p.second) / vnunits;
+		  unsigned vl = (lane + p.second) % vnunits;
+		  vperm.quick_push ({{p.first, vi}, vl});
+		}
+	    }
+	  /* Advance to the next group.  */
+	  for (unsigned j = 0; j < children.length (); ++j)
+	    active_lane[j] += SLP_TREE_LANES (children[j]);
+	}
     }
 
   if (dump_p)
@@ -10342,9 +10460,10 @@ vectorizable_slp_permutation_1 (vec_info *vinfo, gimple_stmt_iterator *gsi,
 		  ? multiple_p (i, npatterns)
 		  : multiple_p (i, TYPE_VECTOR_SUBPARTS (vectype))))
 	    dump_printf (MSG_NOTE, ",");
-	  dump_printf (MSG_NOTE, " vops%u[%u][%u]",
-		       vperm[i].first.first, vperm[i].first.second,
-		       vperm[i].second);
+	  dump_printf (MSG_NOTE, " vops%u[%u][",
+		       vperm[i].first.first, vperm[i].first.second);
+	  dump_dec (MSG_NOTE, vperm[i].second);
+	  dump_printf (MSG_NOTE, "]");
 	}
       dump_printf (MSG_NOTE, "\n");
     }
@@ -10365,16 +10484,37 @@ vectorizable_slp_permutation_1 (vec_info *vinfo, gimple_stmt_iterator *gsi,
   mask.quick_grow (count);
   vec_perm_indices indices;
   unsigned nperms = 0;
-  for (unsigned i = 0; i < vperm.length (); ++i)
+  /* When REPEATING_P is true, we only have UNPACK_FACTOR unique permute
+     vectors to check during analysis, but we need to generate NOUTPUTS
+     vectors during transformation.  */
+  unsigned total_nelts = olanes;
+  if (repeating_p && gsi)
+    total_nelts = (total_nelts / unpack_factor) * noutputs;
+  for (unsigned i = 0; i < total_nelts; ++i)
     {
-      mask_element = vperm[i].second;
-      if (first_vec.first == -1U
-	  || first_vec == vperm[i].first)
-	first_vec = vperm[i].first;
-      else if (second_vec.first == -1U
-	       || second_vec == vperm[i].first)
+      /* VI is the input vector index when generating code for REPEATING_P.  */
+      unsigned vi = i / olanes * (pack_p ? 2 : 1);
+      unsigned ei = i % olanes;
+      mask_element = vperm[ei].second;
+      if (pack_p)
 	{
-	  second_vec = vperm[i].first;
+	  /* In this case, we have N outputs and the single child provides 2N
+	     inputs.  Output X permutes inputs 2X and 2X+1.
+
+	     The mask indices are taken directly from the SLP permutation node.
+	     Index X selects from the first vector if (X / NUNITS) % 2 == 0;
+	     X selects from the second vector otherwise.  These conditions
+	     are only known at compile time for constant-length vectors.  */
+	  first_vec = std::make_pair (0, 0);
+	  second_vec = std::make_pair (0, 1);
+	}
+      else if (first_vec.first == -1U
+	       || first_vec == vperm[ei].first)
+	first_vec = vperm[ei].first;
+      else if (second_vec.first == -1U
+	       || second_vec == vperm[ei].first)
+	{
+	  second_vec = vperm[ei].first;
 	  mask_element += nunits;
 	}
       else
@@ -10438,17 +10578,12 @@ vectorizable_slp_permutation_1 (vec_info *vinfo, gimple_stmt_iterator *gsi,
 	      if (!identity_p)
 		mask_vec = vect_gen_perm_mask_checked (vectype, indices);
 
-	      for (unsigned int vi = 0; vi < noutputs_per_mask; ++vi)
-		{
-		  tree first_def
-		    = vect_get_slp_vect_def (first_node,
-					     first_vec.second + vi);
-		  tree second_def
-		    = vect_get_slp_vect_def (second_node,
-					     second_vec.second + vi);
-		  vect_add_slp_permutation (vinfo, gsi, node, first_def,
-					    second_def, mask_vec, mask[0]);
-		}
+	      tree first_def
+		= vect_get_slp_vect_def (first_node, first_vec.second + vi);
+	      tree second_def
+		= vect_get_slp_vect_def (second_node, second_vec.second + vi);
+	      vect_add_slp_permutation (vinfo, gsi, node, first_def,
+					second_def, mask_vec, mask[0]);
 	    }
 
 	  index = 0;
