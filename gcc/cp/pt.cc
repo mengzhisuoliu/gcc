@@ -13480,7 +13480,12 @@ extract_locals_r (tree *tp, int *walk_subtrees, void *data_)
        outermost tree.  Nested *_EXTRA_ARGS should naturally be empty since
        the outermost (extra-args) tree will intercept any substitution before
        a nested tree can.  */
-    gcc_checking_assert (tree_extra_args (*tp) == NULL_TREE);
+    gcc_checking_assert (tree_extra_args (*tp) == NULL_TREE
+			/* Except a lambda nested inside an extra-args tree
+			   can have extra args if we deferred partial
+			   substitution into it at template parse time.  But
+			   we don't walk LAMBDA_EXPR_EXTRA_ARGS anyway.  */
+			 || TREE_CODE (*tp) == LAMBDA_EXPR);
 
   if (TREE_CODE (*tp) == DECL_EXPR)
     {
@@ -25156,7 +25161,8 @@ unify (tree tparms, tree targs, tree parm, tree arg, int strict,
       }
 
     case REFERENCE_TYPE:
-      if (!TYPE_REF_P (arg))
+      if (!TYPE_REF_P (arg)
+	  || TYPE_REF_IS_RVALUE (parm) != TYPE_REF_IS_RVALUE (arg))
 	return unify_type_mismatch (explain_p, parm, arg);
       return unify (tparms, targs, TREE_TYPE (parm), TREE_TYPE (arg),
 		    strict & UNIFY_ALLOW_MORE_CV_QUAL, explain_p);

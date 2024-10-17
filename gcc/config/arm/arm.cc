@@ -11911,7 +11911,7 @@ arm_rtx_costs_internal (rtx x, enum rtx_code code, enum rtx_code outer_code,
 
     case CONST_DOUBLE:
       if (TARGET_HARD_FLOAT && GET_MODE_CLASS (mode) == MODE_FLOAT
-	  && (mode == SFmode || !TARGET_VFP_SINGLE))
+	  && (mode == SFmode || mode == HFmode || !TARGET_VFP_SINGLE))
 	{
 	  if (vfp3_const_double_rtx (x))
 	    {
@@ -11936,12 +11936,18 @@ arm_rtx_costs_internal (rtx x, enum rtx_code code, enum rtx_code outer_code,
       return true;
 
     case CONST_VECTOR:
-      /* Fixme.  */
       if (((TARGET_NEON && TARGET_HARD_FLOAT
 	    && (VALID_NEON_DREG_MODE (mode) || VALID_NEON_QREG_MODE (mode)))
 	   || TARGET_HAVE_MVE)
 	  && simd_immediate_valid_for_move (x, mode, NULL, NULL))
 	*cost = COSTS_N_INSNS (1);
+      else if (TARGET_HAVE_MVE)
+	{
+	  /* 128-bit vector requires two vldr.64 on MVE.  */
+	  *cost = COSTS_N_INSNS (2);
+	  if (speed_p)
+	    *cost += extra_cost->ldst.loadd * 2;
+	}
       else
 	*cost = COSTS_N_INSNS (4);
       return true;
@@ -24730,11 +24736,11 @@ arm_print_operand (FILE *stream, rtx x, int code)
 	    asm_fprintf (stream, "[%r", REGNO (XEXP (addr, 0)));
 	    inc_val = GET_MODE_SIZE (GET_MODE (x));
 	    if (code == POST_INC || code == POST_DEC)
-	      asm_fprintf (stream, "], #%s%d",(code == POST_INC)
-					      ? "": "-", inc_val);
+	      asm_fprintf (stream, "], #%s%d", (code == POST_INC)
+					       ? "" : "-", inc_val);
 	    else
-	      asm_fprintf (stream, ", #%s%d]!",(code == PRE_INC)
-					       ? "": "-", inc_val);
+	      asm_fprintf (stream, ", #%s%d]!", (code == PRE_INC)
+						? "" : "-", inc_val);
 	  }
 	else if (code == POST_MODIFY || code == PRE_MODIFY)
 	  {
@@ -24743,9 +24749,9 @@ arm_print_operand (FILE *stream, rtx x, int code)
 	    if (postinc_reg && CONST_INT_P (postinc_reg))
 	      {
 		if (code == POST_MODIFY)
-		  asm_fprintf (stream, "], #%wd",INTVAL (postinc_reg));
+		  asm_fprintf (stream, "], #%wd", INTVAL (postinc_reg));
 		else
-		  asm_fprintf (stream, ", #%wd]!",INTVAL (postinc_reg));
+		  asm_fprintf (stream, ", #%wd]!", INTVAL (postinc_reg));
 	      }
 	  }
 	else if (code == PLUS)

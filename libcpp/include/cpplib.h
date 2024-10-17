@@ -144,6 +144,8 @@ class rich_location;
   TK(STRING32_USERDEF,	LITERAL) /* U"string"_suffix - C++11 */		\
   TK(UTF8STRING_USERDEF,LITERAL) /* u8"string"_suffix - C++11 */	\
 									\
+  TK(EMBED,		LITERAL) /* #embed - C23 */			\
+									\
   TK(COMMENT,		LITERAL) /* Only if output comments.  */	\
 				 /* SPELL_LITERAL happens to DTRT.  */	\
   TK(MACRO_ARG,		NONE)	 /* Macro argument.  */			\
@@ -546,6 +548,12 @@ struct cpp_options
   /* Nonzero for C++23 delimited escape sequences.  */
   unsigned char delimited_escape_seqs;
 
+  /* Nonzero for C++23 named universal character escape sequences.  */
+  unsigned char named_uc_escape_seqs;
+
+  /* Nonzero for C2Y 0o prefixed octal integer constants.  */
+  unsigned char octal_constants;
+
   /* Nonzero for 'true' and 'false' in #if expressions.  */
   unsigned char true_false;
 
@@ -577,6 +585,9 @@ struct cpp_options
   /* True if warn about differences between C11 and C23.  */
   signed char cpp_warn_c11_c23_compat;
 
+  /* True if warn about differences between C23 and C2Y.  */
+  signed char cpp_warn_c23_c2y_compat;
+
   /* True if warn about differences between C++98 and C++11.  */
   bool cpp_warn_cxx11_compat;
 
@@ -597,6 +608,9 @@ struct cpp_options
 
   /* True if -finput-charset= option has been used explicitly.  */
   bool cpp_input_charset_explicit;
+
+  /* -Wtrailing-whitespace= value.  */
+  unsigned char cpp_warn_trailing_whitespace;
 
   /* Dependency generation.  */
   struct
@@ -711,6 +725,7 @@ enum cpp_warning_reason {
   CPP_W_PEDANTIC,
   CPP_W_C90_C99_COMPAT,
   CPP_W_C11_C23_COMPAT,
+  CPP_W_C23_C2Y_COMPAT,
   CPP_W_CXX11_COMPAT,
   CPP_W_CXX20_COMPAT,
   CPP_W_CXX14_EXTENSIONS,
@@ -722,7 +737,8 @@ enum cpp_warning_reason {
   CPP_W_INVALID_UTF8,
   CPP_W_UNICODE,
   CPP_W_HEADER_GUARD,
-  CPP_W_PRAGMA_ONCE_OUTSIDE_HEADER
+  CPP_W_PRAGMA_ONCE_OUTSIDE_HEADER,
+  CPP_W_TRAILING_WHITESPACE
 };
 
 /* Callback for header lookup for HEADER, which is the name of a

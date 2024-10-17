@@ -452,7 +452,7 @@ C ObjC Alias(Wc11-c23-compat)
 Deprecated in favor of -Wc11-c23-compat.
 
 Wc23-c2y-compat
-C ObjC Var(warn_c23_c2y_compat) Init(-1) Warning
+C ObjC CPP(cpp_warn_c23_c2y_compat) CppReason(CPP_W_C23_C2Y_COMPAT) Var(warn_c23_c2y_compat) Init(-1) Warning
 Warn about features not present in ISO C23, but present in ISO C2Y.
 
 Wc90-c99-compat
@@ -1465,6 +1465,26 @@ Warn about features not present in traditional C.
 Wtraditional-conversion
 C ObjC Var(warn_traditional_conversion) Warning
 Warn of prototypes causing type conversions different from what would happen in the absence of prototype.
+
+Enum
+Name(warn_trailing_whitespace_kind) Type(int) UnknownError(argument %qs to %<-Wtrailing-whitespace=%> not recognized)
+
+EnumValue
+Enum(warn_trailing_whitespace_kind) String(none) Value(0)
+
+EnumValue
+Enum(warn_trailing_whitespace_kind) String(blank) Value(1)
+
+EnumValue
+Enum(warn_trailing_whitespace_kind) String(space) Value(2)
+
+Wtrailing-whitespace=
+C ObjC C++ ObjC++ CPP(cpp_warn_trailing_whitespace) CppReason(CPP_W_TRAILING_WHITESPACE) Enum(warn_trailing_whitespace_kind) Joined RejectNegative Var(warn_trailing_whitespace) Init(0) Warning
+Warn about trailing whitespace on lines except when in raw string literals.
+
+Wtrailing-whitespace
+C ObjC C++ ObjC++ Alias(Wtrailing-whitespace=,blank,none) Warning
+Warn about trailing whitespace on lines except when in raw string literals.   Equivalent to Wtrailing-whitespace=blank when enabled or Wtrailing-whitespace=none when disabled.
 
 Wtrigraphs
 C ObjC C++ ObjC++ CPP(warn_trigraphs) CppReason(CPP_W_TRIGRAPHS) Var(cpp_warn_trigraphs) Init(2) Warning LangEnabledBy(C ObjC C++ ObjC++,Wall)

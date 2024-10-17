@@ -220,6 +220,9 @@ UrlSuffix(gcc/C_002b_002b-Dialect-Options.html#index-Wcatch-value)
 Wcatch-value=
 UrlSuffix(gcc/C_002b_002b-Dialect-Options.html#index-Wcatch-value)
 
+Wchanges-meaning
+UrlSuffix(gcc/Warning-Options.html#index-Wchanges-meaning)
+
 Wchar-subscripts
 UrlSuffix(gcc/Warning-Options.html#index-Wchar-subscripts)
 
@@ -863,6 +866,12 @@ UrlSuffix(gcc/Warning-Options.html#index-Wno-traditional)
 
 Wtraditional-conversion
 UrlSuffix(gcc/Warning-Options.html#index-Wno-traditional-conversion)
+
+Wtrailing-whitespace=
+UrlSuffix(gcc/Warning-Options.html#index-Wno-trailing-whitespace)
+
+Wtrailing-whitespace
+UrlSuffix(gcc/Warning-Options.html#index-Wno-trailing-whitespace)
 
 Wtrigraphs
 UrlSuffix(gcc/Warning-Options.html#index-Wtrigraphs)
